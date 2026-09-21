@@ -13,6 +13,7 @@ Usage:
 import sys
 import time
 import argparse
+import threading
 from datetime import datetime
 
 import cv2
@@ -132,7 +133,7 @@ def draw_hud(frame, total, hazard_count, fps):
 # ──────────────────────────────────────────────────────────────
 
 # Run face identification every N seconds (it's heavier than YOLO)
-FACE_IDENTIFY_INTERVAL_S = 1.0
+FACE_IDENTIFY_INTERVAL_S = 2.0
 
 
 def draw_face_result(frame, face_result: dict, alert_tracker: dict):
@@ -208,9 +209,25 @@ def main():
     alert_tracker: dict = {}  # Cooldown tracker for terminal alerts
     prev_time = time.time()
 
-    # Face recognition state (throttled to avoid FPS drop)
-    last_face_time = 0.0
-    last_face_result = {"name": "No Face", "distance": -1, "id": None, "detected": False}
+    # ── Face recognition runs on a BACKGROUND THREAD ──
+    # This prevents it from blocking the main video loop
+    face_lock = threading.Lock()
+    face_result_shared = {"name": "No Face", "distance": -1, "id": None, "detected": False}
+    face_running = True
+
+    def face_recognition_worker():
+        """Background thread: periodically runs face identification."""
+        nonlocal face_result_shared
+        while face_running:
+            frame = reader.read()
+            if frame is not None:
+                try:
+                    result = face_memory.identify_face(frame)
+                    with face_lock:
+                        face_result_shared = result
+                except Exception:
+                    pass  # Silently skip on any error
+            time.sleep(FACE_IDENTIFY_INTERVAL_S)
 
     enrolled_count = face_memory.count()
     print(f"\n  [Pipeline] {enrolled_count} face(s) enrolled in database.")
@@ -219,6 +236,10 @@ def main():
 
     try:
         reader.start()
+
+        # Start face recognition on a background thread
+        face_thread = threading.Thread(target=face_recognition_worker, daemon=True)
+        face_thread.start()
 
         while True:
             frame = reader.read()
@@ -234,11 +255,9 @@ def main():
             for det in hazards:
                 print_alert(det, alert_tracker)
 
-            # ── Face Recognition (throttled) ──
-            now = time.time()
-            if now - last_face_time >= FACE_IDENTIFY_INTERVAL_S:
-                last_face_time = now
-                last_face_result = face_memory.identify_face(frame)
+            # ── Read latest face result (thread-safe) ──
+            with face_lock:
+                current_face_result = face_result_shared.copy()
 
             # ── FPS calculation ──
             curr_time = time.time()
@@ -248,7 +267,7 @@ def main():
             # ── Visual overlay ──
             draw_sector_guides(frame)
             draw_detections(frame, detections)
-            draw_face_result(frame, last_face_result, alert_tracker)
+            draw_face_result(frame, current_face_result, alert_tracker)
             draw_hud(frame, len(detections), len(hazards), fps)
 
             cv2.imshow("Saarthi — Hazard Perception", frame)
@@ -262,6 +281,7 @@ def main():
     except KeyboardInterrupt:
         print("\n\n  [Pipeline] Interrupted by user.")
     finally:
+        face_running = False
         reader.stop()
         cv2.destroyAllWindows()
         print("  [Pipeline] Clean shutdown complete.\n")
