@@ -206,19 +206,61 @@ def main():
     detector = ObstacleDetector()
     face_memory = FaceMemory()
 
-    alert_tracker: dict = {}  # Cooldown tracker for terminal alerts
+    alert_tracker: dict = {}
     prev_time = time.time()
+    pipeline_running = True
 
-    # ── Face recognition runs on a BACKGROUND THREAD ──
-    # This prevents it from blocking the main video loop
+    # ── Shared state (written by background threads, read by main) ──
+    detection_lock = threading.Lock()
+    detections_shared = []
+    hazards_shared = []
+
     face_lock = threading.Lock()
     face_result_shared = {"name": "No Face", "distance": -1, "id": None, "detected": False}
-    face_running = True
 
-    def face_recognition_worker():
-        """Background thread: periodically runs face identification."""
+    # ────────────────────────────────────────────────────
+    #  Background thread 1: YOLO obstacle detection
+    # ────────────────────────────────────────────────────
+    def yolo_worker():
+        while pipeline_running:
+            frame = reader.read()
+            if frame is None:
+                time.sleep(0.01)
+                continue
+            try:
+                small = cv2.resize(frame, (640, 480))
+                dets = detector.detect(small)
+
+                # Scale bboxes back to original size
+                h_orig, w_orig = frame.shape[:2]
+                sx, sy = w_orig / 640.0, h_orig / 480.0
+                for d in dets:
+                    x1, y1, x2, y2 = d.bbox
+                    d.bbox = (int(x1*sx), int(y1*sy), int(x2*sx), int(y2*sy))
+
+                haz = detector.get_hazards(dets)
+
+                with detection_lock:
+                    detections_shared.clear()
+                    detections_shared.extend(dets)
+                    hazards_shared.clear()
+                    hazards_shared.extend(haz)
+
+                # Terminal alerts
+                for det in haz:
+                    print_alert(det, alert_tracker)
+
+            except Exception:
+                pass
+            # Small sleep to avoid spinning too fast
+            time.sleep(0.03)
+
+    # ────────────────────────────────────────────────────
+    #  Background thread 2: Face recognition
+    # ────────────────────────────────────────────────────
+    def face_worker():
         nonlocal face_result_shared
-        while face_running:
+        while pipeline_running:
             frame = reader.read()
             if frame is not None:
                 try:
@@ -226,7 +268,7 @@ def main():
                     with face_lock:
                         face_result_shared = result
                 except Exception:
-                    pass  # Silently skip on any error
+                    pass
             time.sleep(FACE_IDENTIFY_INTERVAL_S)
 
     enrolled_count = face_memory.count()
@@ -237,60 +279,34 @@ def main():
     try:
         reader.start()
 
-        # Start face recognition on a background thread
-        face_thread = threading.Thread(target=face_recognition_worker, daemon=True)
-        face_thread.start()
+        # Launch background workers
+        threading.Thread(target=yolo_worker, daemon=True).start()
+        threading.Thread(target=face_worker, daemon=True).start()
 
-        frame_count = 0
-        detect_every_n = 3  # Run YOLO every Nth frame only
-
-        # Cached detection results (reused between YOLO runs)
-        detections = []
-        hazards = []
-
+        # ── Main loop: ONLY display — no heavy processing ──
         while True:
             frame = reader.read()
             if frame is None:
                 time.sleep(0.01)
                 continue
 
-            frame_count += 1
+            # Read cached results (non-blocking)
+            with detection_lock:
+                detections = list(detections_shared)
+                hazards = list(hazards_shared)
 
-            # ── Obstacle Detection (every Nth frame) ──
-            if frame_count % detect_every_n == 0:
-                small = cv2.resize(frame, (640, 480))
-                detections = detector.detect(small)
-
-                # Scale bounding boxes back to original frame size
-                h_orig, w_orig = frame.shape[:2]
-                sx = w_orig / 640.0
-                sy = h_orig / 480.0
-                for det in detections:
-                    x1, y1, x2, y2 = det.bbox
-                    det.bbox = (
-                        int(x1 * sx), int(y1 * sy),
-                        int(x2 * sx), int(y2 * sy),
-                    )
-
-                hazards = detector.get_hazards(detections)
-
-                # Terminal alerts for hazards
-                for det in hazards:
-                    print_alert(det, alert_tracker)
-
-            # ── Read latest face result (thread-safe) ──
             with face_lock:
-                current_face_result = face_result_shared.copy()
+                face_result = face_result_shared.copy()
 
-            # ── FPS calculation ──
+            # FPS
             curr_time = time.time()
             fps = 1.0 / max(curr_time - prev_time, 1e-6)
             prev_time = curr_time
 
-            # ── Visual overlay (every frame — fast) ──
+            # Draw overlays (fast — just drawing, no inference)
             draw_sector_guides(frame)
             draw_detections(frame, detections)
-            draw_face_result(frame, current_face_result, alert_tracker)
+            draw_face_result(frame, face_result, alert_tracker)
             draw_hud(frame, len(detections), len(hazards), fps)
 
             cv2.imshow("Saarthi — Hazard Perception", frame)
@@ -304,7 +320,7 @@ def main():
     except KeyboardInterrupt:
         print("\n\n  [Pipeline] Interrupted by user.")
     finally:
-        face_running = False
+        pipeline_running = False
         reader.stop()
         cv2.destroyAllWindows()
         print("  [Pipeline] Clean shutdown complete.\n")
