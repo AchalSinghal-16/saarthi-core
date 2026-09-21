@@ -1,9 +1,9 @@
 """
 Saarthi — Vision Pipeline Runner
 ==================================
-Integrates the threaded video stream reader with the obstacle detector
-and spatial distance engine. Provides real-time visual overlay and
-structured terminal alerts for nearby hazards.
+Integrates the threaded video stream reader with the obstacle detector,
+spatial distance engine, and facial recognition system. Provides
+real-time visual overlays and structured terminal alerts.
 
 Usage:
     python backend/run_vision.py --source "http://<PHONE_IP>:8080/video"
@@ -19,6 +19,7 @@ import cv2
 
 from vision.stream_reader import ThreadedStreamReader
 from vision.obstacle_detector import ObstacleDetector, HAZARD_ZONE_M
+from vision.face_memory import FaceMemory
 
 
 # ──────────────────────────────────────────────────────────────
@@ -127,6 +128,48 @@ def draw_hud(frame, total, hazard_count, fps):
 
 
 # ──────────────────────────────────────────────────────────────
+#  Face recognition overlay
+# ──────────────────────────────────────────────────────────────
+
+# Run face identification every N seconds (it's heavier than YOLO)
+FACE_IDENTIFY_INTERVAL_S = 1.0
+
+
+def draw_face_result(frame, face_result: dict, alert_tracker: dict):
+    """Draw the face recognition result on the frame and print alerts."""
+    if not face_result["detected"]:
+        return
+
+    name = face_result["name"]
+    h, w = frame.shape[:2]
+
+    if name == "Unknown":
+        color = (0, 165, 255)  # Orange
+        label = "Face: Unknown"
+    else:
+        color = (255, 200, 0)  # Cyan-ish
+        dist_str = f" ({face_result['distance']:.3f})" if face_result["distance"] >= 0 else ""
+        label = f"Face: {name}{dist_str}"
+
+    # Draw label at bottom-left of the frame
+    cv2.putText(
+        frame, label, (10, h - 40),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2,
+    )
+
+    # Terminal alert (with cooldown)
+    now = time.time()
+    alert_key = f"face_{name}"
+    if alert_key not in alert_tracker or (now - alert_tracker[alert_key]) > 3.0:
+        alert_tracker[alert_key] = now
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        if name != "Unknown":
+            print(f"  [{timestamp}] [FACE] Recognized: {name}")
+        else:
+            print(f"  [{timestamp}] [FACE] Unknown person detected")
+
+
+# ──────────────────────────────────────────────────────────────
 #  Main pipeline
 # ──────────────────────────────────────────────────────────────
 
@@ -151,7 +194,7 @@ def main():
 
     # ── Startup ──
     print("=" * 55)
-    print("   Saarthi — Live Hazard Perception Pipeline")
+    print("   Saarthi — Live Hazard & Face Recognition Pipeline")
     print("=" * 55)
     print(f"  Source       : {source}")
     print(f"  Hazard zone  : < {HAZARD_ZONE_M} m")
@@ -160,14 +203,22 @@ def main():
     # Initialize components
     reader = ThreadedStreamReader(source=source)
     detector = ObstacleDetector()
+    face_memory = FaceMemory()
 
     alert_tracker: dict = {}  # Cooldown tracker for terminal alerts
     prev_time = time.time()
 
+    # Face recognition state (throttled to avoid FPS drop)
+    last_face_time = 0.0
+    last_face_result = {"name": "No Face", "distance": -1, "id": None, "detected": False}
+
+    enrolled_count = face_memory.count()
+    print(f"\n  [Pipeline] {enrolled_count} face(s) enrolled in database.")
+    print("  [Pipeline] Running. Press 'q' in the window to quit.\n")
+    print("  ─── Terminal Alerts ─────────────────────────────")
+
     try:
         reader.start()
-        print("\n  [Pipeline] Running. Press 'q' in the window to quit.\n")
-        print("  ─── Terminal Alerts ─────────────────────────────")
 
         while True:
             frame = reader.read()
@@ -175,13 +226,19 @@ def main():
                 time.sleep(0.01)
                 continue
 
-            # ── Detection ──
+            # ── Obstacle Detection (every frame) ──
             detections = detector.detect(frame)
             hazards = detector.get_hazards(detections)
 
             # ── Terminal alerts for hazards ──
             for det in hazards:
                 print_alert(det, alert_tracker)
+
+            # ── Face Recognition (throttled) ──
+            now = time.time()
+            if now - last_face_time >= FACE_IDENTIFY_INTERVAL_S:
+                last_face_time = now
+                last_face_result = face_memory.identify_face(frame)
 
             # ── FPS calculation ──
             curr_time = time.time()
@@ -191,6 +248,7 @@ def main():
             # ── Visual overlay ──
             draw_sector_guides(frame)
             draw_detections(frame, detections)
+            draw_face_result(frame, last_face_result, alert_tracker)
             draw_hud(frame, len(detections), len(hazards), fps)
 
             cv2.imshow("Saarthi — Hazard Perception", frame)

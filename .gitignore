@@ -60,3 +60,9 @@ htmlcov/
 .coverage
 .cache/
 .pytest_cache/
+
+# ========================
+# Saarthi Local Data
+# ========================
+chroma_db/
+models/
