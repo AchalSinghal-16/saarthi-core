@@ -241,19 +241,42 @@ def main():
         face_thread = threading.Thread(target=face_recognition_worker, daemon=True)
         face_thread.start()
 
+        frame_count = 0
+        detect_every_n = 3  # Run YOLO every Nth frame only
+
+        # Cached detection results (reused between YOLO runs)
+        detections = []
+        hazards = []
+
         while True:
             frame = reader.read()
             if frame is None:
                 time.sleep(0.01)
                 continue
 
-            # ── Obstacle Detection (every frame) ──
-            detections = detector.detect(frame)
-            hazards = detector.get_hazards(detections)
+            frame_count += 1
 
-            # ── Terminal alerts for hazards ──
-            for det in hazards:
-                print_alert(det, alert_tracker)
+            # ── Obstacle Detection (every Nth frame) ──
+            if frame_count % detect_every_n == 0:
+                small = cv2.resize(frame, (640, 480))
+                detections = detector.detect(small)
+
+                # Scale bounding boxes back to original frame size
+                h_orig, w_orig = frame.shape[:2]
+                sx = w_orig / 640.0
+                sy = h_orig / 480.0
+                for det in detections:
+                    x1, y1, x2, y2 = det.bbox
+                    det.bbox = (
+                        int(x1 * sx), int(y1 * sy),
+                        int(x2 * sx), int(y2 * sy),
+                    )
+
+                hazards = detector.get_hazards(detections)
+
+                # Terminal alerts for hazards
+                for det in hazards:
+                    print_alert(det, alert_tracker)
 
             # ── Read latest face result (thread-safe) ──
             with face_lock:
@@ -264,7 +287,7 @@ def main():
             fps = 1.0 / max(curr_time - prev_time, 1e-6)
             prev_time = curr_time
 
-            # ── Visual overlay ──
+            # ── Visual overlay (every frame — fast) ──
             draw_sector_guides(frame)
             draw_detections(frame, detections)
             draw_face_result(frame, current_face_result, alert_tracker)
