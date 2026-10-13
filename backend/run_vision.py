@@ -327,49 +327,67 @@ def main():
     currency_expiry = 0.0
     currency_busy = False
 
+    # Immediate action banner state
+    status_lock = threading.Lock()
+    status_text = ""
+    status_expiry = 0.0
+
     def trigger_ocr(frame_to_scan):
-        nonlocal ocr_busy, cached_ocr_boxes, ocr_expiry
+        nonlocal ocr_busy, cached_ocr_boxes, ocr_expiry, status_text, status_expiry
         with ocr_lock:
             if ocr_busy:
-                print("  [OCR] Scanner already in progress, please wait...")
+                print("  [OCR] Already scanning, please wait...", flush=True)
                 return
             ocr_busy = True
         try:
-            print("\n  [ACTION] Processing OCR Readout on captured frame...")
+            print("\n" + "=" * 55, flush=True)
+            print("  [ACTION] Processing OCR Readout on captured frame...", flush=True)
+            print("=" * 55, flush=True)
             text_out, boxes_out = ocr_reader.read_text(frame_to_scan)
             if text_out:
-                print(f"\n  [OCR READOUT]: {text_out}\n")
+                print(f"\n  [OCR READOUT]: {text_out}\n", flush=True)
+                with status_lock:
+                    status_text = f"READ: {text_out[:45]}..."
+                    status_expiry = time.time() + 6.0
             else:
-                print("\n  [OCR READOUT]: No legible text detected in frame.\n")
+                print("\n  [OCR READOUT]: No legible text detected in frame.\n", flush=True)
+                with status_lock:
+                    status_text = "OCR: No text detected (hold closer to camera)"
+                    status_expiry = time.time() + 4.0
             with ocr_lock:
                 cached_ocr_boxes = boxes_out
-                ocr_expiry = time.time() + 6.0  # Display boxes on screen for 6s
+                ocr_expiry = time.time() + 7.0  # Keep boxes visible for 7s
         except Exception as e:
-            print(f"  [OCR ERROR]: {e}")
+            print(f"  [OCR ERROR]: {e}", flush=True)
         finally:
             with ocr_lock:
                 ocr_busy = False
 
     def trigger_currency(frame_to_scan):
-        nonlocal currency_busy, cached_currency_banner, currency_expiry
+        nonlocal currency_busy, cached_currency_banner, currency_expiry, status_text, status_expiry
         with currency_lock:
             if currency_busy:
-                print("  [CURRENCY] Scanner already in progress, please wait...")
+                print("  [CURRENCY] Already scanning, please wait...", flush=True)
                 return
             currency_busy = True
         try:
-            print("\n  [ACTION] Checking Currency Denomination...")
+            print("\n" + "=" * 55, flush=True)
+            print("  [ACTION] Checking Indian Rupee Banknote...", flush=True)
+            print("=" * 55, flush=True)
             denom, conf = currency_detector.detect_currency(frame_to_scan)
             if conf > 0:
-                msg = f"Detected {denom} Note (Conf: {int(conf * 100)}%)"
+                msg = f"Detected {denom} Note ({int(conf * 100)}%)"
             else:
                 msg = denom
-            print(f"\n  [CURRENCY]: {msg}\n")
+            print(f"\n  [CURRENCY]: {msg}\n", flush=True)
             with currency_lock:
                 cached_currency_banner = f"[CURRENCY]: {msg}"
-                currency_expiry = time.time() + 5.0  # Display banner on screen for 5s
+                currency_expiry = time.time() + 6.0  # Display banner for 6s
+            with status_lock:
+                status_text = f"CURRENCY: {msg}"
+                status_expiry = time.time() + 6.0
         except Exception as e:
-            print(f"  [CURRENCY ERROR]: {e}")
+            print(f"  [CURRENCY ERROR]: {e}", flush=True)
         finally:
             with currency_lock:
                 currency_busy = False
@@ -427,12 +445,12 @@ def main():
             time.sleep(FACE_IDENTIFY_INTERVAL_S)
 
     enrolled_count = face_memory.count()
-    print(f"\n  [Pipeline] {enrolled_count} face(s) enrolled in database.")
-    print("  [Pipeline] Running. Controls:")
-    print("             'r' -> Read Text (Smart OCR)")
-    print("             'c' -> Check Currency (INR Denomination)")
-    print("             'q' -> Quit Pipeline\n")
-    print("  ─── Terminal Alerts ─────────────────────────────")
+    print(f"\n  [Pipeline] {enrolled_count} face(s) enrolled in database.", flush=True)
+    print("  [Pipeline] Running. Controls (click video window first):", flush=True)
+    print("             Press [R] -> Read Text (Smart OCR)", flush=True)
+    print("             Press [C] -> Check Currency (INR Denomination)", flush=True)
+    print("             Press [Q] -> Quit Pipeline\n", flush=True)
+    print("  ─── Terminal Alerts ─────────────────────────────", flush=True)
 
     try:
         reader.start()
@@ -448,6 +466,8 @@ def main():
                 time.sleep(0.01)
                 continue
 
+            h, w = frame.shape[:2]
+
             # Read cached YOLO results (non-blocking)
             with detection_lock:
                 detections = list(detections_shared)
@@ -462,7 +482,7 @@ def main():
             fps = 1.0 / max(curr_time - prev_time, 1e-6)
             prev_time = curr_time
 
-            # Draw overlays
+            # Draw base vision overlays
             draw_sector_guides(frame)
             draw_detections(frame, detections)
             draw_face_boxes(frame, current_faces, face_alert_tracker)
@@ -478,18 +498,36 @@ def main():
                 if now < currency_expiry and cached_currency_banner:
                     draw_currency_banner(frame, cached_currency_banner)
 
+            # Draw HUD bar
             draw_hud(frame, len(detections), len(hazards), fps)
+
+            # Draw interactive shortcut footer
+            cv2.rectangle(frame, (0, h - 22), (w, h), (0, 0, 0), -1)
+            footer_text = "Press [R]: Read Text  |  [C]: Check Currency  |  [Q]: Quit"
+            with status_lock:
+                if now < status_expiry and status_text:
+                    footer_text = f">> {status_text} <<"
+            cv2.putText(
+                frame, footer_text, (10, h - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1
+            )
 
             cv2.imshow("Saarthi — Hazard Perception", frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            if key in (ord("q"), ord("Q")):
                 break
-            elif key == ord("r"):
-                # Grab high-res frame and trigger OCR
+            elif key in (ord("r"), ord("R")):
+                print("\n  [INPUT] 'R' pressed -> Capturing frame for OCR...", flush=True)
+                with status_lock:
+                    status_text = "OCR: Reading text... Please hold steady"
+                    status_expiry = time.time() + 6.0
                 threading.Thread(target=trigger_ocr, args=(frame.copy(),), daemon=True).start()
-            elif key == ord("c"):
-                # Grab frame and trigger Currency detection
+            elif key in (ord("c"), ord("C")):
+                print("\n  [INPUT] 'C' pressed -> Capturing frame for Currency check...", flush=True)
+                with status_lock:
+                    status_text = "CURRENCY: Scanning note... Please hold steady"
+                    status_expiry = time.time() + 6.0
                 threading.Thread(target=trigger_currency, args=(frame.copy(),), daemon=True).start()
 
     except ConnectionError as e:

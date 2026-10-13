@@ -45,43 +45,76 @@ class CurrencyDetector:
         "500": "500 Rupees",
     }
 
+    DENOMINATION_PATTERNS = {
+        "500": [
+            r"\b500\b", r"₹\s*500", r"\b5OO\b", r"\bSOO\b", r"\bFIVE\s*HUNDRED\b",
+            r"\b500\s*RUPEES?\b", r"५००"
+        ],
+        "200": [
+            r"\b200\b", r"₹\s*200", r"\b2OO\b", r"\bZOO\b", r"\bTWO\s*HUNDRED\b",
+            r"\b200\s*RUPEES?\b", r"२००"
+        ],
+        "100": [
+            r"\b100\b", r"₹\s*100", r"\b1OO\b", r"\bIOO\b", r"\bONE\s*HUNDRED\b",
+            r"\bHUNDRED\b", r"\b100\s*RUPEES?\b", r"१००"
+        ],
+        "50": [
+            r"\b50\b", r"₹\s*50", r"\b5O\b", r"\bSO\b", r"\bFIFTY\b",
+            r"\b50\s*RUPEES?\b", r"५०"
+        ],
+        "20": [
+            r"\b20\b", r"₹\s*20", r"\b2O\b", r"\bZO\b", r"\bTWENTY\b",
+            r"\b20\s*RUPEES?\b", r"२०"
+        ],
+        "10": [
+            r"\b10\b", r"₹\s*10", r"\b1O\b", r"\bIO\b", r"\bTEN\b",
+            r"\b10\s*RUPEES?\b", r"१०"
+        ],
+    }
+
+    BANKNOTE_KEYWORDS = [
+        "RESERVE", "BANK", "INDIA", "BHARAT", "RUPEE", "RUPEES",
+        "PROMISE", "CENTRAL", "GOVERNOR", "MAHATMA", "GANDHI",
+        "GUARANTEED", "PAY", "BEARER", "SUM"
+    ]
+
     # HSV Color profiles for Mahatma Gandhi New Series banknotes
-    # Format: (Hue_min, Hue_max, Sat_min, Sat_max, Val_min, Val_max)
+    # Tuned specifically to avoid false positives on ambient neutral backgrounds
     COLOR_PROFILES = {
+        "20": {   # Greenish Yellow (distinct yellow-green hue)
+            "h_range": (26, 52),
+            "s_range": (55, 240),
+            "v_range": (75, 240),
+            "name": "Greenish Yellow",
+        },
+        "50": {   # Fluorescent Blue / Cyan
+            "h_range": (85, 115),
+            "s_range": (70, 255),
+            "v_range": (80, 255),
+            "name": "Fluorescent Blue",
+        },
+        "100": {  # Lavender / Purple
+            "h_range": (125, 155),
+            "s_range": (45, 200),
+            "v_range": (75, 230),
+            "name": "Lavender",
+        },
+        "200": {  # Bright Yellow-Orange
+            "h_range": (15, 26),
+            "s_range": (120, 255),
+            "v_range": (140, 255),
+            "name": "Bright Yellow-Orange",
+        },
         "10": {   # Chocolate Brown
             "h_range": (8, 22),
             "s_range": (60, 220),
             "v_range": (50, 180),
             "name": "Chocolate Brown",
         },
-        "20": {   # Greenish Yellow
-            "h_range": (28, 48),
-            "s_range": (80, 255),
-            "v_range": (100, 255),
-            "name": "Greenish Yellow",
-        },
-        "50": {   # Fluorescent Blue / Cyan
-            "h_range": (85, 115),
-            "s_range": (90, 255),
-            "v_range": (90, 255),
-            "name": "Fluorescent Blue",
-        },
-        "100": {  # Lavender / Purple
-            "h_range": (125, 155),
-            "s_range": (50, 200),
-            "v_range": (90, 230),
-            "name": "Lavender",
-        },
-        "200": {  # Bright Yellow-Orange
-            "h_range": (18, 32),
-            "s_range": (140, 255),
-            "v_range": (160, 255),
-            "name": "Bright Yellow-Orange",
-        },
-        "500": {  # Stone Grey (Low saturation, medium brightness)
-            "h_range": (0, 180),
-            "s_range": (0, 45),
-            "v_range": (70, 210),
+        "500": {  # Stone Grey (Requires strict saturation bounds)
+            "h_range": (50, 110),
+            "s_range": (15, 50),
+            "v_range": (80, 180),
             "name": "Stone Grey",
         },
     }
@@ -167,7 +200,7 @@ class CurrencyDetector:
 
         Returns:
             Tuple of:
-              - denomination_str (str): e.g., '100 Rupees', '500 Rupees', or 'No Currency Detected'
+              - denomination_str (str): e.g., '20 Rupees', '100 Rupees', or 'No Currency Detected'
               - confidence (float): Recognition confidence between 0.0 and 1.0.
         """
         # ── 1. If custom YOLO model is loaded, run inference ──
@@ -189,46 +222,51 @@ class CurrencyDetector:
             if best_label:
                 return self.DENOMINATION_NAMES[best_label], round(best_conf, 2)
 
-        # ── 2. Fallback: Color-Histogram + OCR Numeral Matching ──
+        # ── 2. Fallback: OCR Numeral/Text Matching + Color Profiling ──
         ocr = self._get_ocr_reader()
         extracted_text = ""
         if ocr is not None:
             extracted_text, _ = ocr.read_text(frame)
             extracted_text = extracted_text.upper()
 
-        # Check for explicit numeral patterns in OCR text
+        # Step 2A: Match against denomination text/numeral patterns
         ocr_denom = None
-        # Order by largest numbers first to avoid matching '50' inside '500'
-        for d in ["500", "200", "100", "50", "20", "10"]:
-            # Match word boundary or currency symbol: e.g. "500", "₹500", "RS 500"
-            pattern = rf"(?:₹|RS\.?|RUPEES)?\s*\b{d}\b"
-            if re.search(pattern, extracted_text):
-                ocr_denom = d
+        for denom, patterns in self.DENOMINATION_PATTERNS.items():
+            for pat in patterns:
+                if re.search(pat, extracted_text):
+                    ocr_denom = denom
+                    break
+            if ocr_denom is not None:
                 break
 
-        # Check color dominance
+        # Step 2B: Check color dominance in central zone
         color_denom, color_ratio = self._analyze_color_profile(frame)
 
-        # Decision Fusion
+        # Step 2C: Check for official banknote keywords
+        has_banknote_keyword = any(
+            kw in extracted_text for kw in self.BANKNOTE_KEYWORDS
+        )
+
+        # ── Decision Fusion ──
+        # Case 1: Direct OCR Match
         if ocr_denom is not None:
-            # OCR found clear denomination numeral
-            if color_denom == ocr_denom and color_ratio > 0.15:
+            if color_denom == ocr_denom and color_ratio > 0.12:
                 # Both OCR and Color match!
                 return self.DENOMINATION_NAMES[ocr_denom], 0.95
             else:
-                # OCR matched clearly
-                return self.DENOMINATION_NAMES[ocr_denom], 0.85
+                # Strong OCR match
+                return self.DENOMINATION_NAMES[ocr_denom], 0.88
 
-        # If OCR didn't catch the exact numeral, check if general currency markers exist
-        has_currency_keyword = any(
-            kw in extracted_text for kw in ["RESERVE", "BANK", "INDIA", "BHARAT", "RUPEE", "PROMISE"]
-        )
+        # Case 2: Banknote keywords detected (e.g. "RESERVE BANK OF INDIA") + Color dominance
+        if has_banknote_keyword and color_denom is not None:
+            # Color provides the denomination
+            if color_ratio > 0.15:
+                return f"{self.DENOMINATION_NAMES[color_denom]} (Probable)", round(min(0.85, 0.65 + color_ratio), 2)
 
-        if color_denom and color_ratio > 0.28:
-            if has_currency_keyword:
-                return f"{self.DENOMINATION_NAMES[color_denom]} (Probable)", round(min(0.80, color_ratio * 2.2), 2)
-            elif color_ratio > 0.40:
-                return f"{self.DENOMINATION_NAMES[color_denom]} (Color Match)", round(min(0.70, color_ratio * 1.5), 2)
+        # Case 3: High-confidence non-grey saturated color match (e.g. ₹20 Greenish-Yellow or ₹50 Cyan)
+        # Note: Exclude "500" from color-only match to prevent false positives from neutral room backgrounds
+        if color_denom is not None and color_denom != "500" and color_ratio > 0.35:
+            return f"{self.DENOMINATION_NAMES[color_denom]} (Color Match)", round(min(0.75, color_ratio * 1.5), 2)
 
         return "No Currency Detected", 0.0
 

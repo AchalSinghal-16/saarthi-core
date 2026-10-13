@@ -23,12 +23,12 @@ class OCRReader:
     low-confidence artifacts (< 0.40).
     """
 
-    def __init__(self, languages: list = None, gpu: bool = False, min_confidence: float = 0.40):
+    def __init__(self, languages: list = None, gpu: bool = False, min_confidence: float = 0.30):
         """
         Args:
             languages: List of language codes, defaults to ['en'].
             gpu: False to enforce CPU execution for edge hardware.
-            min_confidence: Minimum recognition confidence threshold (default: 0.40).
+            min_confidence: Minimum recognition confidence threshold (default: 0.30).
         """
         self.languages = languages or ['en']
         self.gpu = gpu
@@ -58,6 +58,9 @@ class OCRReader:
     def read_text(self, frame: np.ndarray) -> Tuple[str, List[Tuple[str, Tuple[int, int, int, int], float]]]:
         """
         Extract text from an OpenCV BGR frame.
+        Automatically scales high-res frames (e.g. 1080p phone streams)
+        to max 960px for sub-second CPU inference, then projects bounding
+        boxes back to the original frame dimensions.
 
         Args:
             frame: A BGR numpy array from OpenCV.
@@ -67,7 +70,20 @@ class OCRReader:
               - consolidated_text (str): Full concatenated text string.
               - detections (list): List of (text, (x1, y1, x2, y2), confidence).
         """
-        preprocessed = self.preprocess(frame)
+        orig_h, orig_w = frame.shape[:2]
+
+        # Downscale if larger than 960px for fast CPU inference (<1.0s vs >12s)
+        max_dim = 960
+        if max(orig_h, orig_w) > max_dim:
+            scale = max_dim / float(max(orig_h, orig_w))
+            target_w = int(orig_w * scale)
+            target_h = int(orig_h * scale)
+            scaled_frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        else:
+            scale = 1.0
+            scaled_frame = frame
+
+        preprocessed = self.preprocess(scaled_frame)
 
         # EasyOCR readtext returns list of (bbox, text, prob)
         # where bbox is [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
@@ -75,20 +91,20 @@ class OCRReader:
 
         detections = []
         valid_texts = []
+        inv_scale = 1.0 / scale
 
         for bbox, text, conf in raw_results:
             clean_text = text.strip()
             if not clean_text or conf < self.min_confidence:
                 continue
 
-            # Convert 4-point polygon to axis-aligned bounding box (x1, y1, x2, y2)
-            xs = [int(pt[0]) for pt in bbox]
-            ys = [int(pt[1]) for pt in bbox]
-            h, w = frame.shape[:2]
+            # Convert 4-point polygon to axis-aligned bounding box and scale to original frame
+            xs = [int(pt[0] * inv_scale) for pt in bbox]
+            ys = [int(pt[1] * inv_scale) for pt in bbox]
             x1 = max(0, min(xs))
             y1 = max(0, min(ys))
-            x2 = min(w, max(xs))
-            y2 = min(h, max(ys))
+            x2 = min(orig_w, max(xs))
+            y2 = min(orig_h, max(ys))
 
             detections.append((clean_text, (x1, y1, x2, y2), round(float(conf), 3)))
             valid_texts.append(clean_text)
