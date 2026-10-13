@@ -24,37 +24,76 @@ from vision.face_memory import FaceMemory
 
 
 # ──────────────────────────────────────────────────────────────
-#  Terminal alert formatting
+#  Alert Fatigue & Spatial Warning Manager
 # ──────────────────────────────────────────────────────────────
 
-# Cooldown (seconds) per object class to avoid spamming the same alert
-ALERT_COOLDOWN_S = 2.0
-
-
-def print_alert(det, alert_tracker: dict):
+class AudioCooldownMatrix:
     """
-    Print a structured spatial warning to the terminal, respecting
-    a per-class cooldown to avoid flooding.
+    Suppresses repetitive hazard warnings to prevent alert fatigue.
 
-    Format:
-        [ALERT] Chair detected 1.3m ahead in Center
+    Rules:
+      1. Default cooldown of 10.0 seconds per (label, sector).
+      2. Delta-distance override: If the obstacle is >= 0.5m closer
+         than the last recorded distance, bypass the 10-second cooldown
+         and alert immediately.
     """
-    now = time.time()
-    key = f"{det.label}_{det.direction}"
+    COOLDOWN_SECONDS = 10.0
+    DELTA_DISTANCE_M = 0.5
 
-    # Skip if we alerted for this same class+direction recently
-    if key in alert_tracker and (now - alert_tracker[key]) < ALERT_COOLDOWN_S:
-        return
+    def __init__(self, cooldown_seconds: float = 10.0, delta_distance_m: float = 0.5):
+        self.cooldown_seconds = cooldown_seconds
+        self.delta_distance_m = delta_distance_m
+        # Key: (label.lower(), sector) -> {"timestamp": float, "distance": float}
+        self.last_alert_times = {}
 
-    alert_tracker[key] = now
+    def should_alert(self, det) -> bool:
+        """
+        Evaluate if an alert should trigger.
+        Returns True if:
+          - Never alerted for this object & sector, OR
+          - >= 10 seconds elapsed since last alert, OR
+          - Obstacle moved closer by >= 0.5 meters.
+        """
+        now = time.time()
+        key = (det.label.lower(), det.direction)
 
-    dist_str = f"{det.distance_m:.1f}m" if det.distance_m > 0 else "unknown distance"
-    timestamp = datetime.now().strftime("%H:%M:%S")
+        if key not in self.last_alert_times:
+            self.last_alert_times[key] = {
+                "timestamp": now,
+                "distance": det.distance_m,
+            }
+            return True
 
-    print(
-        f"  [{timestamp}] [ALERT] {det.label.capitalize()} detected "
-        f"{dist_str} ahead in {det.direction}"
-    )
+        record = self.last_alert_times[key]
+        time_elapsed = now - record["timestamp"]
+        prev_distance = record["distance"]
+
+        # Delta-distance override: object moved closer by >= 0.5m
+        is_closer_by_delta = (
+            prev_distance > 0
+            and det.distance_m > 0
+            and (prev_distance - det.distance_m >= self.delta_distance_m)
+        )
+
+        if is_closer_by_delta or (time_elapsed >= self.cooldown_seconds):
+            self.last_alert_times[key] = {
+                "timestamp": now,
+                "distance": det.distance_m,
+            }
+            return True
+
+        return False
+
+    def emit_alert(self, det):
+        """Check cooldown rules and print spatial warning if permitted."""
+        if self.should_alert(det):
+            dist_str = f"{det.distance_m:.1f}m" if det.distance_m > 0 else "unknown distance"
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(
+                f"  [{timestamp}] [ALERT] {det.label.capitalize()} detected "
+                f"{dist_str} ahead in {det.direction}"
+            )
+
 
 
 # ──────────────────────────────────────────────────────────────
@@ -132,42 +171,62 @@ def draw_hud(frame, total, hazard_count, fps):
 #  Face recognition overlay
 # ──────────────────────────────────────────────────────────────
 
-# Run face identification every N seconds (it's heavier than YOLO)
-FACE_IDENTIFY_INTERVAL_S = 2.0
+# ──────────────────────────────────────────────────────────────
+#  Face recognition overlay
+# ──────────────────────────────────────────────────────────────
+
+FACE_IDENTIFY_INTERVAL_S = 1.0
 
 
-def draw_face_result(frame, face_result: dict, alert_tracker: dict):
-    """Draw the face recognition result on the frame and print alerts."""
-    if not face_result["detected"]:
-        return
+def draw_face_boxes(frame, detected_faces: list, face_alert_tracker: dict):
+    """
+    Render bounding boxes and names directly on faces using cached MTCNN coordinates.
 
-    name = face_result["name"]
-    h, w = frame.shape[:2]
+    Args:
+        frame: OpenCV BGR frame.
+        detected_faces: List of (name, (x1, y1, x2, y2)) tuples.
+        face_alert_tracker: Dict tracking timestamps for terminal face alerts.
+    """
+    for name, bbox in detected_faces:
+        x1, y1, x2, y2 = bbox
 
-    if name == "Unknown":
-        color = (0, 165, 255)  # Orange
-        label = "Face: Unknown"
-    else:
-        color = (255, 200, 0)  # Cyan-ish
-        dist_str = f" ({face_result['distance']:.3f})" if face_result["distance"] >= 0 else ""
-        label = f"Face: {name}{dist_str}"
-
-    # Draw label at bottom-left of the frame
-    cv2.putText(
-        frame, label, (10, h - 40),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2,
-    )
-
-    # Terminal alert (with cooldown)
-    now = time.time()
-    alert_key = f"face_{name}"
-    if alert_key not in alert_tracker or (now - alert_tracker[alert_key]) > 3.0:
-        alert_tracker[alert_key] = now
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        if name != "Unknown":
-            print(f"  [{timestamp}] [FACE] Recognized: {name}")
+        if name == "Unknown":
+            box_color = (0, 165, 255)   # Orange for unknown face
+            text_color = (255, 255, 255)
+            display_name = "Unknown"
         else:
-            print(f"  [{timestamp}] [FACE] Unknown person detected")
+            box_color = (0, 255, 0)     # Green for recognized face
+            text_color = (0, 0, 0)
+            display_name = name
+
+        # Bounding box around the face
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+
+        # Name label badge above the bounding box
+        label_text = f"Face: {display_name}"
+        (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+
+        # Draw filled label background
+        badge_y1 = max(0, y1 - th - 8)
+        badge_y2 = y1
+        cv2.rectangle(frame, (x1, badge_y1), (x1 + tw + 6, badge_y2), box_color, -1)
+
+        # Text over the badge
+        cv2.putText(
+            frame, label_text, (x1 + 3, max(th + 2, y1 - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2
+        )
+
+        # Terminal face alerts (cooldown 5.0 seconds per person)
+        now = time.time()
+        alert_key = f"face_{name}"
+        if alert_key not in face_alert_tracker or (now - face_alert_tracker[alert_key]) > 5.0:
+            face_alert_tracker[alert_key] = now
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            if name != "Unknown":
+                print(f"  [{timestamp}] [FACE] Recognized: {name}")
+            else:
+                print(f"  [{timestamp}] [FACE] Unknown person detected")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -205,8 +264,9 @@ def main():
     reader = ThreadedStreamReader(source=source)
     detector = ObstacleDetector()
     face_memory = FaceMemory()
+    alert_matrix = AudioCooldownMatrix(cooldown_seconds=10.0, delta_distance_m=0.5)
 
-    alert_tracker: dict = {}
+    face_alert_tracker = {}
     prev_time = time.time()
     pipeline_running = True
 
@@ -216,7 +276,7 @@ def main():
     hazards_shared = []
 
     face_lock = threading.Lock()
-    face_result_shared = {"name": "No Face", "distance": -1, "id": None, "detected": False}
+    cached_faces = []  # List of (name, (x1, y1, x2, y2)) tuples
 
     # ────────────────────────────────────────────────────
     #  Background thread 1: YOLO obstacle detection
@@ -246,27 +306,26 @@ def main():
                     hazards_shared.clear()
                     hazards_shared.extend(haz)
 
-                # Terminal alerts
+                # Process hazard alerts through AudioCooldownMatrix
                 for det in haz:
-                    print_alert(det, alert_tracker)
+                    alert_matrix.emit_alert(det)
 
             except Exception:
                 pass
-            # Small sleep to avoid spinning too fast
             time.sleep(0.03)
 
     # ────────────────────────────────────────────────────
-    #  Background thread 2: Face recognition
+    #  Background thread 2: Dedicated daemon face worker
     # ────────────────────────────────────────────────────
-    def face_worker():
-        nonlocal face_result_shared
+    def face_worker_thread():
+        nonlocal cached_faces
         while pipeline_running:
             frame = reader.read()
             if frame is not None:
                 try:
-                    result = face_memory.identify_face(frame)
+                    results = face_memory.identify_face(frame)
                     with face_lock:
-                        face_result_shared = result
+                        cached_faces = list(results)
                 except Exception:
                     pass
             time.sleep(FACE_IDENTIFY_INTERVAL_S)
@@ -279,34 +338,35 @@ def main():
     try:
         reader.start()
 
-        # Launch background workers
+        # Launch background daemon workers
         threading.Thread(target=yolo_worker, daemon=True).start()
-        threading.Thread(target=face_worker, daemon=True).start()
+        threading.Thread(target=face_worker_thread, daemon=True).start()
 
-        # ── Main loop: ONLY display — no heavy processing ──
+        # ── Main loop: ONLY display & overlays (zero inference latency) ──
         while True:
             frame = reader.read()
             if frame is None:
                 time.sleep(0.01)
                 continue
 
-            # Read cached results (non-blocking)
+            # Read cached YOLO results (non-blocking)
             with detection_lock:
                 detections = list(detections_shared)
                 hazards = list(hazards_shared)
 
+            # Read cached face recognition results (non-blocking)
             with face_lock:
-                face_result = face_result_shared.copy()
+                current_faces = list(cached_faces)
 
-            # FPS
+            # FPS calculation
             curr_time = time.time()
             fps = 1.0 / max(curr_time - prev_time, 1e-6)
             prev_time = curr_time
 
-            # Draw overlays (fast — just drawing, no inference)
+            # Draw overlays
             draw_sector_guides(frame)
             draw_detections(frame, detections)
-            draw_face_result(frame, face_result, alert_tracker)
+            draw_face_boxes(frame, current_faces, face_alert_tracker)
             draw_hud(frame, len(detections), len(hazards), fps)
 
             cv2.imshow("Saarthi — Hazard Perception", frame)

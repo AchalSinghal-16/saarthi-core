@@ -69,11 +69,11 @@ class FaceMemory:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # ── Face detection & alignment ──
-        # MTCNN returns a cropped, aligned 160×160 face tensor
+        # MTCNN returns cropped, aligned 160×160 face tensor(s)
         self.mtcnn = MTCNN(
             image_size=160,
             margin=20,
-            keep_all=False,         # Return only the most prominent face
+            keep_all=True,          # Detect and keep all faces in the frame
             post_process=True,      # Normalise pixel values for FaceNet
             device=self.device,
         )
@@ -133,6 +133,10 @@ class FaceMemory:
         if face_tensor is None:
             return None  # No face detected
 
+        # If multiple faces were detected, select the first/primary face
+        if face_tensor.ndim == 4:
+            face_tensor = face_tensor[0]
+
         # Step 3: Add batch dimension and move to device
         face_batch = face_tensor.unsqueeze(0).to(self.device)
 
@@ -174,12 +178,13 @@ class FaceMemory:
 
     def identify_face(
         self, frame: np.ndarray, threshold: float = 0.6
-    ) -> dict:
+    ) -> list:
         """
-        Identify a face in a raw OpenCV frame against the database.
+        Identify all faces in a raw OpenCV frame against the database.
 
-        Extracts the embedding, queries ChromaDB for the nearest
-        neighbor using cosine distance, and returns the result.
+        Uses MTCNN to detect bounding boxes and extract aligned crops,
+        runs InceptionResnetV1 for 512-dim embeddings, and queries
+        ChromaDB for nearest neighbor cosine similarity matches.
 
         Args:
             frame:     A BGR numpy array (H, W, 3) from OpenCV.
@@ -187,40 +192,53 @@ class FaceMemory:
                        Lower = stricter. (0.6 is a good default.)
 
         Returns:
-            A dict with:
-                - "name"     : Recognized person's name, or "Unknown"
-                - "distance" : Cosine distance (lower = more similar)
-                - "id"       : Face ID in the database
-                - "detected" : True if a face was found in the frame
-            If no face is detected in the frame, returns:
-                {"name": "No Face", "distance": -1, "id": None, "detected": False}
+            A list of tuples: [(name, (x1, y1, x2, y2)), ...] for every face
+            detected in the frame. If unrecognised, name is 'Unknown'.
+            Returns an empty list [] if no faces are detected.
         """
-        embedding = self.get_embedding(frame)
+        rgb_frame = frame[:, :, ::-1]  # OpenCV BGR → RGB
+        pil_image = Image.fromarray(rgb_frame)
 
-        if embedding is None:
-            return {
-                "name": "No Face",
-                "distance": -1,
-                "id": None,
-                "detected": False,
-            }
+        # Detect bounding boxes for all faces
+        boxes, _ = self.mtcnn.detect(pil_image)
 
-        match = self.search_face(embedding, threshold=threshold)
+        if boxes is None or len(boxes) == 0:
+            return []
 
-        if match is not None:
-            return {
-                "name": match["name"],
-                "distance": match["distance"],
-                "id": match["id"],
-                "detected": True,
-            }
-        else:
-            return {
-                "name": "Unknown",
-                "distance": -1,
-                "id": None,
-                "detected": True,
-            }
+        # Extract aligned crops for detected boxes
+        faces = self.mtcnn.extract(pil_image, boxes, save_path=None)
+        if faces is None or len(faces) == 0:
+            return []
+
+        # Ensure batch dimension (N, 3, 160, 160)
+        if faces.ndim == 3:
+            faces = faces.unsqueeze(0)
+
+        faces = faces.to(self.device)
+        with torch.no_grad():
+            embeddings = self.resnet(faces)
+
+        embeddings = embeddings.cpu().numpy().tolist()
+
+        h, w = frame.shape[:2]
+        results = []
+        for i, box in enumerate(boxes):
+            if box is None:
+                continue
+
+            x1 = max(0, int(box[0]))
+            y1 = max(0, int(box[1]))
+            x2 = min(w, int(box[2]))
+            y2 = min(h, int(box[3]))
+            bbox = (x1, y1, x2, y2)
+
+            emb = embeddings[i]
+            match = self.search_face(emb, threshold=threshold)
+
+            name = match["name"] if match is not None else "Unknown"
+            results.append((name, bbox))
+
+        return results
 
     # ──────────────────────────────────────────────────────────
     #  Low-level database operations
