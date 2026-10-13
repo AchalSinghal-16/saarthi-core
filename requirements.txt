@@ -3,3 +3,4 @@ numpy
 ultralytics
 facenet-pytorch
 chromadb
+easyocr
