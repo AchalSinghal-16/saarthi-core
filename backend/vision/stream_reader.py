@@ -74,11 +74,15 @@ class ThreadedStreamReader:
         the shared `self.frame` variable so only the newest frame
         is ever available to consumers.
         """
+        last_warn_time = 0.0
         while self.running:
             ret, frame = self._cap.read()
-            if not ret:
-                print("[StreamReader] WARNING: Failed to read frame. Retrying...")
-                time.sleep(0.1)
+            if not ret or frame is None:
+                now = time.time()
+                if now - last_warn_time > 3.0:
+                    last_warn_time = now
+                    print(f"[StreamReader] Waiting for valid frames from source: {self.source}...", flush=True)
+                time.sleep(0.05)
                 continue
 
             with self._lock:

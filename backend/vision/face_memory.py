@@ -151,6 +151,10 @@ class FaceMemory:
     #  High-level: Enrollment & Identification
     # ──────────────────────────────────────────────────────────
 
+    def enroll(self, frame: np.ndarray, name: str) -> Optional[str]:
+        """Alias for enroll_face for API compatibility."""
+        return self.enroll_face(frame, name)
+
     def enroll_face(self, frame: np.ndarray, name: str) -> Optional[str]:
         """
         Enroll a face from a raw OpenCV frame into the database.

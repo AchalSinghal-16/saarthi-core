@@ -62,7 +62,13 @@ htmlcov/
 .pytest_cache/
 
 # ========================
-# Saarthi Local Data
+# Saarthi Local Data & Temporary Audio
 # ========================
 chroma_db/
 models/
+*.pt
+*.webm
+*.wav
+temp_*
+frontend/dist/
+frontend/node_modules/

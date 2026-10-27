@@ -148,11 +148,11 @@ class CurrencyDetector:
         if self.ocr_reader is None:
             try:
                 from vision.ocr_reader import OCRReader
-                self.ocr_reader = OCRReader(gpu=False)
+                self.ocr_reader = OCRReader()
             except ImportError:
                 try:
                     from backend.vision.ocr_reader import OCRReader
-                    self.ocr_reader = OCRReader(gpu=False)
+                    self.ocr_reader = OCRReader()
                 except Exception as e:
                     print(f"[CurrencyDetector] Could not load OCRReader for fallback: {e}")
             except Exception as e:
@@ -222,11 +222,21 @@ class CurrencyDetector:
             if best_label:
                 return self.DENOMINATION_NAMES[best_label], round(best_conf, 2)
 
-        # ── 2. Fallback: OCR Numeral/Text Matching + Color Profiling ──
+        # ── 2. Primary Engine: Multimodal Gemini Banknote VLM ──
         ocr = self._get_ocr_reader()
+        if ocr is not None and hasattr(ocr, "detect_banknote"):
+            try:
+                denom_vlm, conf_vlm = ocr.detect_banknote(frame)
+                if conf_vlm > 0:
+                    return denom_vlm, conf_vlm
+            except Exception as e:
+                print(f"[CurrencyDetector] VLM detection error, falling back: {e}", flush=True)
+
+        # ── 3. Fallback: OCR Numeral/Text Matching + Color Profiling ──
         extracted_text = ""
         if ocr is not None:
-            extracted_text, _ = ocr.read_text(frame)
+            ocr_res = ocr.read_text(frame)
+            extracted_text = ocr_res[0] if isinstance(ocr_res, tuple) else (ocr_res or "")
             extracted_text = extracted_text.upper()
 
         # Step 2A: Match against denomination text/numeral patterns
