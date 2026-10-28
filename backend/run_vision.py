@@ -703,7 +703,7 @@ def main():
 
             except Exception:
                 pass
-            time.sleep(0.03)
+            time.sleep(0.065)  # Cap YOLO inference at ~15 FPS to optimize Pi 5 thermal & CPU headroom
 
     # ────────────────────────────────────────────────────
     #  Background thread 2: Dedicated daemon face worker

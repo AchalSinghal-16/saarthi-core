@@ -9,6 +9,7 @@ and caregiver remote configuration.
 
 import os
 import sys
+import json
 import time
 import asyncio
 import threading
@@ -75,12 +76,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Emergency Configuration
-EMERGENCY_SETTINGS = {
-    "phone_number": "+91 98765 43210",
-    "sos_message": "EMERGENCY: User requires immediate assistance at their current location.",
-    "twilio_configured": True,
-}
+# Global Emergency Configuration & Persistence
+SETTINGS_FILE = os.path.join(_BACKEND_DIR, "settings.json")
+
+def load_emergency_settings() -> dict:
+    """Load persisted emergency contact settings from disk, or fallback to default."""
+    default_settings = {
+        "phone_number": "+91 98765 43210",
+        "sos_message": "EMERGENCY: User requires immediate assistance at their current location.",
+        "twilio_configured": True,
+    }
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                if isinstance(saved, dict) and "phone_number" in saved:
+                    return {**default_settings, **saved}
+        except Exception as e:
+            print(f"[Settings Warning] Could not load {SETTINGS_FILE}: {e}")
+    return default_settings
+
+def save_emergency_settings(settings: dict):
+    """Save emergency configuration permanently to disk."""
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        print(f"[Settings] Saved emergency configuration to {SETTINGS_FILE}")
+    except Exception as e:
+        print(f"[Settings Error] Could not save {SETTINGS_FILE}: {e}")
+
+EMERGENCY_SETTINGS = load_emergency_settings()
 
 
 class EmergencySettingsPayload(BaseModel):
@@ -207,38 +232,25 @@ def trigger_currency():
         action_busy = True
     try:
         if reader is None:
-            with action_lock:
-                action_busy = False
             return "Camera stream not connected."
         frame = reader.read()
         if frame is None:
-            with action_lock:
-                action_busy = False
             return "No camera frame available."
         print("\n  [ACTION] Scanning Indian Rupee Currency with Gemini VLM...", flush=True)
         synthesizer.speak("Scanning note, please hold steady.", interrupt=True)
 
-        def _async_currency_worker(frame_img):
-            global action_busy
-            try:
-                denom, conf = currency_detector.detect_currency(frame_img)
-                announcement = f"Currency detected: {denom}" if conf > 0 else denom
-                print(f"  [CURRENCY RESULT]: {announcement}", flush=True)
-                synthesizer.speak(announcement, interrupt=True)
-            except Exception as e:
-                print(f"  [CURRENCY ERROR]: {e}", flush=True)
-                synthesizer.speak("Could not identify currency note.", interrupt=True)
-            finally:
-                with action_lock:
-                    action_busy = False
-
-        threading.Thread(target=_async_currency_worker, args=(frame.copy(),), daemon=True).start()
-        return "Scanning Indian Rupee note with Gemini VLM..."
+        denom, conf = currency_detector.detect_currency(frame)
+        announcement = f"Currency detected: {denom}" if conf > 0 else denom
+        print(f"  [CURRENCY RESULT]: {announcement}", flush=True)
+        synthesizer.speak(announcement, interrupt=True)
+        return announcement
     except Exception as e:
+        print(f"  [CURRENCY ERROR]: {e}", flush=True)
+        synthesizer.speak("Could not identify currency note.", interrupt=True)
+        return str(e)
+    finally:
         with action_lock:
             action_busy = False
-        print(f"  [CURRENCY ERROR]: {e}", flush=True)
-        return str(e)
 
 def trigger_location(lat: Optional[float] = None, lng: Optional[float] = None):
     global action_busy
@@ -618,7 +630,7 @@ def yolo_worker():
 
         except Exception:
             pass
-        time.sleep(0.03)
+        time.sleep(0.065)  # Cap YOLO inference at ~15 FPS to optimize Pi 5 thermal & CPU headroom
 
 
 def face_worker():
@@ -762,7 +774,7 @@ async def video_stream():
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
         )
-        await asyncio.sleep(0.03)  # ~30 FPS
+        await asyncio.sleep(0.066)  # Cap telemetry stream at ~15 FPS to prevent Pi Wi-Fi/thermal congestion
 
 
 @app.get("/api/video_feed")
@@ -852,7 +864,9 @@ def update_emergency_settings(payload: EmergencySettingsPayload):
     if payload.sos_message:
         EMERGENCY_SETTINGS["sos_message"] = payload.sos_message.strip()
 
-    print(f"[TelemetryServer] Emergency SOS updated: {EMERGENCY_SETTINGS['phone_number']}")
+    save_emergency_settings(EMERGENCY_SETTINGS)
+
+    print(f"[TelemetryServer] Emergency SOS updated and saved: {EMERGENCY_SETTINGS['phone_number']}")
     return {
         "success": True,
         "message": "Emergency contact configuration updated successfully.",

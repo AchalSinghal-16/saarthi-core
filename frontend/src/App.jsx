@@ -5,6 +5,39 @@ import L from 'leaflet';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+import {
+  Activity,
+  AlertTriangle,
+  Camera,
+  CheckCircle2,
+  Cpu,
+  MapPin,
+  Mic,
+  MicOff,
+  Navigation,
+  Phone,
+  Radio,
+  RefreshCw,
+  RotateCw,
+  Send,
+  Settings,
+  ShieldAlert,
+  Sparkles,
+  StopCircle,
+  Thermometer,
+  UploadCloud,
+  UserPlus,
+  Users,
+  Volume2,
+  VolumeX,
+  Wifi,
+  X,
+  BookOpen,
+  Banknote,
+  Eye,
+  Sliders,
+  ChevronRight,
+} from 'lucide-react';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -26,6 +59,9 @@ function ChangeView({ center }) {
 const API_BASE = 'http://localhost:8000';
 
 export default function App() {
+  // Navigation & Active Panel State
+  const [activeTab, setActiveTab] = useState('faces'); // 'faces' | 'emergency' | 'camera'
+
   // Face Enrollment State
   const [faceName, setFaceName] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -47,14 +83,14 @@ export default function App() {
   const [cameraStatus, setCameraStatus] = useState(null);
   const [cameraLoading, setCameraLoading] = useState(false);
 
-  // Live Location State (Ola Maps)
+  // Live Location State (Ola Maps & Browser GPS)
   const [locationData, setLocationData] = useState(null);
   const [locationLoading, setLocationLoading] = useState(false);
 
   // System Vitals State (CPU & Temperature)
   const [vitals, setVitals] = useState({ cpu_percent: 0, cpu_temp: 45.0 });
 
-  // Caregiver Intercom State (Push-to-Talk & Click-to-Talk)
+  // Caregiver Intercom State (Push-to-Talk)
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [intercomStatus, setIntercomStatus] = useState(null);
@@ -80,7 +116,13 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/trigger/${actionType}`, { method: 'POST' });
       const data = await res.json();
       if (data.success && data.result) {
-        setActionStatus(`${data.result}`);
+        if (actionType === 'currency') {
+          setActionStatus(`💵 ${data.result}`);
+        } else if (actionType === 'read') {
+          setActionStatus(`📖 ${data.result}`);
+        } else {
+          setActionStatus(`${data.result}`);
+        }
       } else {
         setActionStatus(`Triggered ${actionType}.`);
       }
@@ -328,7 +370,6 @@ export default function App() {
         }
       };
 
-      // Collect data slices every 100ms
       recorder.start(100);
       mediaRecorderRef.current = recorder;
       startTimeRef.current = Date.now();
@@ -349,7 +390,6 @@ export default function App() {
     }
   };
 
-  // Intercom: Stop recording and upload
   const stopIntercom = () => {
     if (recordTimerRef.current) clearInterval(recordTimerRef.current);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -365,7 +405,7 @@ export default function App() {
     if (recordTimerRef.current) clearInterval(recordTimerRef.current);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
-        mediaRecorderRef.current.onstop = null; // Detach upload handler
+        mediaRecorderRef.current.onstop = null;
         mediaRecorderRef.current.stop();
       } catch (err) {
         console.error('Error cancelling recorder:', err);
@@ -385,7 +425,6 @@ export default function App() {
     }
   };
 
-  // Fetch vitals
   const fetchVitals = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/vitals`);
@@ -401,7 +440,6 @@ export default function App() {
     }
   };
 
-  // Fetch location
   const fetchLocation = async () => {
     setLocationLoading(true);
     try {
@@ -417,7 +455,6 @@ export default function App() {
     }
   };
 
-  // Fetch camera source
   const fetchCameraSource = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/settings/source`);
@@ -430,7 +467,6 @@ export default function App() {
     }
   };
 
-  // Fetch enrolled faces
   const fetchFaces = async () => {
     setFacesLoading(true);
     try {
@@ -446,7 +482,6 @@ export default function App() {
     }
   };
 
-  // Fetch emergency settings
   const fetchEmergencySettings = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/settings/emergency`);
@@ -464,13 +499,12 @@ export default function App() {
     fetchEmergencySettings();
     fetchCameraSource();
     fetchLocation();
-    syncBrowserLocation(); // Automatically acquire real-time browser/device GPS
+    syncBrowserLocation();
     fetchVitals();
 
     const vitalsInterval = setInterval(fetchVitals, 5000);
     const locationInterval = setInterval(fetchLocation, 10000);
 
-    // Browser-level keyboard shortcut triggers (works whenever dashboard is open)
     const handleKeyDown = (e) => {
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
       const key = e.key.toLowerCase();
@@ -501,7 +535,6 @@ export default function App() {
     };
   }, []);
 
-  // Handle file selection
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -511,11 +544,10 @@ export default function App() {
     }
   };
 
-  // Submit face enrollment
   const handleEnrollSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFile || !faceName.trim()) {
-      setEnrollStatus({ type: 'error', message: 'Please provide both a photo and a name.' });
+      setEnrollStatus({ type: 'error', message: 'Please provide both a portrait photo and full name.' });
       return;
     }
 
@@ -534,7 +566,7 @@ export default function App() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setEnrollStatus({ type: 'success', message: data.message || `Enrolled ${faceName} successfully!` });
+        setEnrollStatus({ type: 'success', message: data.message || `Enrolled ${faceName} into ChromaDB successfully!` });
         setFaceName('');
         setSelectedFile(null);
         setFilePreview(null);
@@ -549,7 +581,6 @@ export default function App() {
     }
   };
 
-  // Submit emergency contact update
   const handleEmergencySubmit = async (e) => {
     e.preventDefault();
     if (!emergencyPhone.trim()) return;
@@ -566,7 +597,7 @@ export default function App() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setEmergencyStatus({ type: 'success', message: 'Emergency contact updated successfully!' });
+        setEmergencyStatus({ type: 'success', message: 'Emergency contact saved to permanent storage!' });
       } else {
         setEmergencyStatus({ type: 'error', message: data.detail || 'Failed to update emergency contact.' });
       }
@@ -577,7 +608,6 @@ export default function App() {
     }
   };
 
-  // Submit camera source update (e.g. phone IP webcam)
   const handleCameraSourceSubmit = async (e) => {
     e.preventDefault();
     if (!cameraSource.trim()) return;
@@ -606,101 +636,156 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Top Navbar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-4 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-cyan-400 flex items-center justify-center font-bold text-slate-950 text-xl shadow-md">
-            S
+    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+      
+      {/* ── Enterprise Master Navbar ── */}
+      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-[#090e1a]/90 backdrop-blur-xl px-5 lg:px-8 py-3.5 shadow-2xl">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          
+          {/* Logo & Platform Info */}
+          <div className="flex items-center gap-3.5">
+            <div className="relative">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-indigo-500 to-amber-400 p-[1.5px] shadow-lg shadow-cyan-500/20">
+                <div className="w-full h-full bg-[#090e1a] rounded-[10px] flex items-center justify-center font-extrabold text-white text-lg tracking-wider">
+                  S
+                </div>
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-[#090e1a] rounded-full"></span>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                  Saarthi
+                  <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-400 border border-cyan-800/80 font-bold tracking-wider">
+                    OS 2.0 • Caregiver Portal
+                  </span>
+                </h1>
+              </div>
+              <p className="text-[11px] text-slate-400 font-medium">Edge AI Assistive Wearable Telemetry & Biometrics</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              Saarthi <span className="text-xs uppercase px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 font-semibold tracking-wider">Caregiver Hub</span>
-            </h1>
-            <p className="text-xs text-slate-400">Assistive Wearable Remote Telemetry & Biometrics</p>
-          </div>
-        </div>
 
-        <div className="flex items-center gap-3">
-          {/* Quick-glance Vitals Badge */}
-          <div className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-950/70 border border-slate-800 text-xs font-mono">
-            <span className="text-slate-400">CPU:</span>
-            <span className="text-cyan-400 font-semibold">{vitals.cpu_percent.toFixed(0)}%</span>
-            <span className="text-slate-700">•</span>
-            <span className="text-slate-400">Temp:</span>
-            <span className={`font-semibold ${vitals.cpu_temp > 65 ? 'text-rose-400' : 'text-emerald-400'}`}>
-              {vitals.cpu_temp.toFixed(0)}°C
-            </span>
-          </div>
+          {/* Real-Time Hardware Telemetry Bar */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* CPU Badge */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs font-mono shadow-inner">
+              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-slate-400">CPU:</span>
+              <span className="text-cyan-300 font-bold">{vitals.cpu_percent.toFixed(0)}%</span>
+            </div>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/80 text-emerald-400 text-xs font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Telemetry Stream Live
+            {/* Core Temp Badge */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs font-mono shadow-inner">
+              <Thermometer className={`w-3.5 h-3.5 ${vitals.cpu_temp > 65 ? 'text-rose-400' : 'text-emerald-400'}`} />
+              <span className="text-slate-400">Core:</span>
+              <span className={`font-bold ${vitals.cpu_temp > 65 ? 'text-rose-400' : 'text-emerald-300'}`}>
+                {vitals.cpu_temp.toFixed(0)}°C
+              </span>
+            </div>
+
+            {/* Live Telemetry Status */}
+            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-800/80 text-emerald-300 text-xs font-semibold shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="hidden md:inline">Edge Stream Active (15 FPS)</span>
+              <span className="md:hidden">Live</span>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main Two-Column Layout */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {/* ── Main Dashboard Workspace ── */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Left Column: Live Video Telemetry Feed (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col gap-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
-            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
-                <h2 className="font-semibold text-sm text-slate-200">Wearable Edge Camera Telemetry</h2>
+        {/* ════════ LEFT COLUMN: Live Perception & Geospatial Radar (7 Cols) ════════ */}
+        <div className="lg:col-span-7 flex flex-col gap-5">
+          
+          {/* Card: Live Edge Camera Telemetry */}
+          <div className="bg-[#0b1222] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl flex flex-col ring-1 ring-white/5">
+            
+            {/* Video Header */}
+            <div className="px-5 py-3 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/50">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+                </span>
+                <h2 className="font-semibold text-xs uppercase tracking-wider text-slate-200 flex items-center gap-2">
+                  <Camera className="w-4 h-4 text-cyan-400" />
+                  Live Wearable Perception Feed
+                </h2>
               </div>
-              <span className="text-xs text-slate-400 font-mono">MJPEG • 30 FPS • YOLOv8 + FaceNet</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-slate-400 px-2.5 py-0.5 rounded-md bg-slate-950 border border-slate-800">
+                  YOLOv8 + FaceNet • 15 FPS
+                </span>
+              </div>
             </div>
 
-            {/* Video Container */}
-            <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center overflow-hidden group">
+            {/* Video Viewer */}
+            <div className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden group">
               <img
                 src={`${API_BASE}/api/video_feed`}
                 alt="Saarthi Live Telemetry Stream"
                 className="w-full h-full object-contain"
                 onError={(e) => {
                   e.target.onerror = null;
-                  e.target.src = 'https://placehold.co/640x480/0f172a/94a3b8?text=Connecting+to+Saarthi+Stream...';
+                  e.target.src = 'https://placehold.co/640x480/090e1a/94a3b8?text=Connecting+to+Wearable+Stream...';
                 }}
               />
-              <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur border border-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-300 pointer-events-none flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
-                Live Spatial Distance HUD Active
+
+              {/* Real-time HUD Status Watermark */}
+              <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md border border-slate-800/90 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-300 pointer-events-none flex items-center gap-2 shadow-lg">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                <span>Spatial HUD Active</span>
+              </div>
+
+              {/* Source Watermark */}
+              <div className="absolute top-3 right-3 bg-slate-950/80 backdrop-blur-md border border-slate-800/90 px-2.5 py-1 rounded-md text-[10px] font-mono text-slate-400 pointer-events-none">
+                SRC: {cameraSource}
               </div>
             </div>
 
-            {/* Telemetry Guide Info */}
-            <div className="p-4 bg-slate-900/40 border-t border-slate-800/80 grid grid-cols-3 gap-3 text-center text-xs">
-              <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-                <span className="block text-slate-400">Green Boxes</span>
-                <span className="font-semibold text-emerald-400">Safe Objects (&gt;2.5m)</span>
+            {/* Spatial Hazard Detection Legend */}
+            <div className="p-3.5 bg-slate-950/70 border-t border-slate-800/80 grid grid-cols-3 gap-2.5 text-center text-xs">
+              <div className="bg-slate-900/60 p-2 rounded-xl border border-emerald-900/40 flex flex-col items-center">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Safe Sector</span>
+                <span className="font-semibold text-emerald-400 text-xs flex items-center gap-1 mt-0.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span> &gt; 2.5m Obstacle
+                </span>
               </div>
-              <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-                <span className="block text-slate-400">Red Boxes</span>
-                <span className="font-semibold text-rose-400">Hazard Zone (&lt;2.5m)</span>
+              <div className="bg-slate-900/60 p-2 rounded-xl border border-rose-900/40 flex flex-col items-center">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Hazard Zone</span>
+                <span className="font-semibold text-rose-400 text-xs flex items-center gap-1 mt-0.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span> &lt; 2.5m Proximity
+                </span>
               </div>
-              <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/50">
-                <span className="block text-slate-400">Face Recognition</span>
-                <span className="font-semibold text-amber-400">Auto Name Audio Alert</span>
+              <div className="bg-slate-900/60 p-2 rounded-xl border border-amber-900/40 flex flex-col items-center">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Biometrics</span>
+                <span className="font-semibold text-amber-400 text-xs flex items-center gap-1 mt-0.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span> Face ID Speech Alert
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Live GPS Map Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
-            <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/60 flex-wrap gap-2">
+          {/* Card: Real-Time Geospatial Map & Ola Maps Address */}
+          <div className="bg-[#0b1222] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl flex flex-col ring-1 ring-white/5">
+            
+            {/* Map Header with Real-Time GPS Sync */}
+            <div className="px-5 py-3 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/50 flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <h3 className="font-semibold text-sm text-slate-200 flex items-center gap-2">
-                  <span>🗺️</span> Real-Time GPS Tracking Map
+                <Navigation className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-semibold text-xs uppercase tracking-wider text-slate-200">
+                  Wearable Geospatial Radar
                 </h3>
               </div>
+              
               <div className="flex items-center gap-2">
                 {locationData?.source && (
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                    locationData.source.includes('GPS') ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
+                  <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold border ${
+                    locationData.source.includes('GPS')
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/80'
+                      : 'bg-amber-950/80 text-amber-300 border-amber-700/80'
                   }`}>
                     {locationData.source}
                   </span>
@@ -708,16 +793,17 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => syncBrowserLocation()}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-950 hover:bg-emerald-900 border border-emerald-700/80 text-emerald-200 font-semibold transition flex items-center gap-1 shadow-sm"
-                  title="Acquire real device GPS coordinates from browser"
+                  className="text-xs px-3 py-1 rounded-lg bg-emerald-950 hover:bg-emerald-900 border border-emerald-700/80 text-emerald-200 font-semibold transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                  title="Acquire high-precision browser GPS coordinates"
                 >
-                  <span>📍</span> Sync Device GPS
+                  <MapPin className="w-3.5 h-3.5" /> Sync Device GPS
                 </button>
               </div>
             </div>
 
-            <div className="p-3 bg-slate-950 flex flex-col gap-2">
-              <div className="h-64 w-full rounded-xl overflow-hidden border border-slate-800 relative z-0">
+            {/* Interactive Leaflet Radar */}
+            <div className="p-3 bg-slate-950 flex flex-col gap-2.5">
+              <div className="h-64 w-full rounded-xl overflow-hidden border border-slate-800 relative z-0 shadow-inner">
                 <MapContainer
                   center={[
                     locationData?.coordinates?.lat || locationData?.lat || 28.6139,
@@ -734,7 +820,7 @@ export default function App() {
                     ]}
                   />
                   <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
                   <Marker
@@ -744,8 +830,8 @@ export default function App() {
                     ]}
                   >
                     <Popup>
-                      <div className="text-xs font-sans text-slate-900 font-medium">
-                        <strong>Wearable Position</strong><br />
+                      <div className="text-xs font-sans text-slate-900 font-semibold p-1">
+                        <strong className="text-emerald-700">Wearable Position</strong><br />
                         {locationData?.address || 'Live GPS Tracked'}
                       </div>
                     </Popup>
@@ -753,112 +839,107 @@ export default function App() {
                 </MapContainer>
               </div>
 
-              {locationData && (
-                <div className="text-xs text-slate-300 px-2 py-1 flex items-center justify-between">
-                  <span className="text-slate-400 truncate max-w-[70%]">
-                    📍 {locationData?.address || 'Live GPS Position (Press [L] for Street Name)'}
+              {/* Ola Maps Geocoded Street Banner */}
+              <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 truncate max-w-[75%]">
+                  <span className="p-1.5 rounded-lg bg-emerald-950/80 border border-emerald-800 text-emerald-400 shrink-0">
+                    <MapPin className="w-3.5 h-3.5" />
                   </span>
-                  <span className="font-mono text-[10px] text-amber-400">
-                    {(locationData?.coordinates?.lat || locationData?.lat)?.toFixed(4)}, {(locationData?.coordinates?.lng || locationData?.lng)?.toFixed(4)}
+                  <div className="truncate">
+                    <span className="text-[10px] text-slate-400 block font-mono">Resolved Street Address (Ola Maps):</span>
+                    <span className="font-medium text-slate-200 truncate block">
+                      {locationData?.address || 'Live GPS Position (Press [L] to announce street address)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] text-slate-400 block font-mono">GPS Coordinates:</span>
+                  <span className="font-mono text-xs text-amber-400 font-bold">
+                    {(locationData?.coordinates?.lat || locationData?.lat || 28.6139)?.toFixed(4)}, {(locationData?.coordinates?.lng || locationData?.lng || 77.2090)?.toFixed(4)}
                   </span>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Biometrics & Caregiver Controls (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col gap-6">
+        {/* ════════ RIGHT COLUMN: Control Hub & Caregiver Operations (5 Cols) ════════ */}
+        <div className="lg:col-span-5 flex flex-col gap-5">
 
-          {/* Card: Wearable System Vitals */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+          {/* ── CARD 1: Instant Wearable Assistive Commands & Kill-Switch ── */}
+          <div className="bg-[#0b1222] border border-slate-800/90 rounded-2xl p-4 shadow-xl flex flex-col gap-3.5 ring-1 ring-white/5">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
               <div className="flex items-center gap-2">
-                <span className="text-violet-400 text-sm">⚡</span>
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Wearable System Vitals</h3>
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
+                  Wearable Assistive Controls
+                </h3>
               </div>
-              <span className="text-[10px] text-slate-500 font-mono">Auto-refreshes (5s)</span>
+              <span className="text-[10px] text-cyan-400 font-mono">Hotkeys: [R, C, V, L, X]</span>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              {/* CPU Load */}
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3 flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400 font-medium">CPU Usage</span>
-                  <span className="text-xs font-mono font-bold text-cyan-400">
-                    {vitals.cpu_percent.toFixed(1)}%
-                  </span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-cyan-400 h-1.5 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, Math.max(2, vitals.cpu_percent))}%` }}
-                  ></div>
-                </div>
-              </div>
-
-              {/* CPU Temperature */}
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3 flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400 font-medium">Core Temp</span>
-                  <span className={`text-xs font-mono font-bold ${vitals.cpu_temp > 65 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                    {vitals.cpu_temp.toFixed(1)}°C
-                  </span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className={`h-1.5 rounded-full transition-all duration-500 ${vitals.cpu_temp > 65 ? 'bg-rose-400' : 'bg-emerald-400'}`}
-                    style={{ width: `${Math.min(100, (vitals.cpu_temp / 85) * 100)}%` }}
-                  ></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Card: Instant Wearable Assistive Actions */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <div className="flex items-center gap-2">
-                <span className="text-amber-400">⚡</span>
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Wearable Assistive Controls</h3>
-              </div>
-              <span className="text-[10px] text-cyan-400 font-mono">Click or press [R, C, V, L]</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
+            {/* Action Grid (4 Actions) */}
+            <div className="grid grid-cols-2 gap-2.5">
+              
+              {/* Read Document Text */}
               <button
                 type="button"
                 onClick={() => triggerAction('read', '📖 Reading document text with Gemini VLM...')}
-                className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-cyan-800/60 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-2 transition hover:scale-[1.02]"
+                className="py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-cyan-800/60 hover:border-cyan-500 text-cyan-300 text-xs font-semibold flex items-center justify-between transition-all group shadow-sm active:scale-[0.98]"
               >
-                <span>📖</span> Read Text <kbd className="text-[10px] bg-slate-800 px-1 rounded text-slate-400">R</kbd>
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
+                  <span>Read Text</span>
+                </div>
+                <kbd className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400 font-mono border border-slate-800">R</kbd>
               </button>
+
+              {/* Currency Recognition */}
               <button
                 type="button"
                 onClick={() => triggerAction('currency', '💵 Scanning Indian Rupee banknote...')}
-                className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-amber-800/60 text-amber-300 text-xs font-semibold flex items-center justify-center gap-2 transition hover:scale-[1.02]"
+                className="py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-amber-800/60 hover:border-amber-500 text-amber-300 text-xs font-semibold flex items-center justify-between transition-all group shadow-sm active:scale-[0.98]"
               >
-                <span>💵</span> Currency <kbd className="text-[10px] bg-slate-800 px-1 rounded text-slate-400">C</kbd>
+                <div className="flex items-center gap-2">
+                  <Banknote className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                  <span>Currency</span>
+                </div>
+                <kbd className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400 font-mono border border-slate-800">C</kbd>
               </button>
+
+              {/* Active Voice Mode (Ask VLM) */}
               <button
                 type="button"
                 onClick={toggleVoiceQuery}
-                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition hover:scale-[1.02] ${
+                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between transition-all group shadow-sm active:scale-[0.98] ${
                   isVoiceListening
                     ? 'bg-rose-950 border-rose-500 text-rose-200 animate-pulse'
-                    : 'bg-slate-950 hover:bg-slate-800 border-pink-800/60 text-pink-300'
+                    : 'bg-slate-900/90 hover:bg-slate-800/90 border-violet-800/60 hover:border-violet-500 text-violet-300'
                 }`}
               >
-                <span>{isVoiceListening ? '🛑' : '🎙️'}</span>
-                {isVoiceListening ? `Listening 00:0${voiceSeconds} (Click to Submit)` : 'Ask VLM'}{' '}
-                <kbd className="text-[10px] bg-slate-800 px-1 rounded text-slate-400">V</kbd>
+                <div className="flex items-center gap-2">
+                  {isVoiceListening ? (
+                    <Mic className="w-4 h-4 text-rose-400 animate-bounce" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-violet-400 group-hover:scale-110 transition-transform" />
+                  )}
+                  <span>{isVoiceListening ? `Listening 0:0${voiceSeconds}` : 'Ask VLM'}</span>
+                </div>
+                <kbd className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400 font-mono border border-slate-800">V</kbd>
               </button>
+
+              {/* Announce Street Location */}
               <button
                 type="button"
                 onClick={triggerLocationAction}
-                className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-emerald-800/60 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 transition hover:scale-[1.02]"
+                className="py-2.5 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-emerald-800/60 hover:border-emerald-500 text-emerald-300 text-xs font-semibold flex items-center justify-between transition-all group shadow-sm active:scale-[0.98]"
               >
-                <span>📍</span> Location <kbd className="text-[10px] bg-slate-800 px-1 rounded text-slate-400">L</kbd>
+                <div className="flex items-center gap-2">
+                  <Navigation className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                  <span>Location</span>
+                </div>
+                <kbd className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400 font-mono border border-slate-800">L</kbd>
               </button>
             </div>
 
@@ -866,71 +947,88 @@ export default function App() {
             <button
               type="button"
               onClick={stopAudio}
-              className="w-full py-2.5 px-3 rounded-xl bg-red-950/80 hover:bg-red-900 border border-red-700/80 text-red-200 text-xs font-bold flex items-center justify-center gap-2 transition hover:scale-[1.01] shadow-md shadow-red-950/50"
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-red-950/90 to-red-900/90 hover:from-red-900 hover:to-red-800 border border-red-700/80 text-red-200 text-xs font-bold flex items-center justify-between transition-all active:scale-[0.99] shadow-lg shadow-red-950/40"
             >
-              <span className="text-sm font-black">⏹️</span> Stop Audio (✕) <kbd className="text-[10px] bg-red-900/90 px-1.5 py-0.5 rounded text-red-200 font-mono">X</kbd>
+              <div className="flex items-center gap-2">
+                <VolumeX className="w-4 h-4 text-red-300" />
+                <span>Immediate Audio Kill-Switch (Halt Speech)</span>
+              </div>
+              <kbd className="text-[10px] bg-red-950 px-2 py-0.5 rounded font-mono border border-red-700 text-red-300">X</kbd>
             </button>
 
+            {/* Live Result / Status Feedback Toast */}
             {actionStatus && (
-              <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 flex items-center justify-between">
-                <span className="truncate max-w-[85%]">{actionStatus}</span>
-                <button type="button" onClick={() => setActionStatus(null)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 flex items-center justify-between gap-2 shadow-inner">
+                <span className="truncate max-w-[88%] font-medium">{actionStatus}</span>
+                <button
+                  type="button"
+                  onClick={() => setActionStatus(null)}
+                  className="text-slate-500 hover:text-slate-300 p-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
           </div>
 
-          {/* Card: Caregiver Intercom (Push-to-Talk) */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200 flex items-center gap-2">
-                <span className="text-rose-400">🎙️</span> Caregiver Intercom (Push-to-Talk)
-              </h3>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+          {/* ── CARD 2: Caregiver Studio Intercom (Two-Way Communication) ── */}
+          <div className="bg-[#0b1222] border border-slate-800/90 rounded-2xl p-4 shadow-xl flex flex-col gap-3 ring-1 ring-white/5">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Radio className="w-4 h-4 text-rose-400" />
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
+                  Caregiver Earbud Intercom
+                </h3>
+              </div>
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-mono font-bold border ${
                 isRecording
                   ? 'bg-rose-950 text-rose-300 border-rose-700 animate-pulse'
                   : 'bg-slate-950 text-slate-400 border-slate-800'
               }`}>
-                {isRecording ? `REC 00:0${recordingSeconds}` : 'READY'}
+                {isRecording ? `TRANSMITTING 0:0${recordingSeconds}` : 'INTERCOM READY'}
               </span>
             </div>
 
-            <p className="text-xs text-slate-400">
-              Click the button once to start recording, speak your message, then click again to send to user earbuds.
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Click once to record your message. Click again to transmit instantly to the user's wearable earbuds.
             </p>
 
             <div className="flex flex-col gap-2">
               <button
                 type="button"
                 onClick={toggleIntercom}
-                className={`w-full py-4 px-4 rounded-xl font-bold text-sm select-none transition-all duration-200 flex items-center justify-center gap-3 shadow-lg ${
+                className={`w-full py-3.5 px-4 rounded-xl font-bold text-xs select-none transition-all duration-200 flex items-center justify-center gap-2.5 shadow-lg active:scale-[0.98] ${
                   isRecording
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/50 scale-[0.98] ring-4 ring-rose-500/40 animate-pulse'
-                    : 'bg-gradient-to-r from-rose-900/80 via-slate-800 to-rose-900/80 hover:from-rose-800 hover:to-rose-800 text-rose-200 border border-rose-800/80 hover:scale-[1.01]'
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/50 ring-4 ring-rose-500/30 animate-pulse'
+                    : 'bg-gradient-to-r from-rose-950 via-slate-900 to-rose-950 hover:from-rose-900 hover:to-rose-900 text-rose-200 border border-rose-800/70 hover:border-rose-600'
                 }`}
               >
-                <span className={`text-xl ${isRecording ? 'animate-bounce' : ''}`}>
-                  {isRecording ? '🛑' : '🎙️'}
-                </span>
-                <span>
-                  {isRecording
-                    ? `REC 00:0${recordingSeconds} — Click to Send Transmission`
-                    : 'Click to Record Voice Message'}
-                </span>
+                {isRecording ? (
+                  <>
+                    <StopCircle className="w-4 h-4 animate-bounce" />
+                    <span>REC 0:0{recordingSeconds} — Click to Send Transmission</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-4 h-4 text-rose-400" />
+                    <span>Click to Record Voice Message</span>
+                  </>
+                )}
               </button>
 
               {isRecording && (
                 <button
                   type="button"
                   onClick={cancelIntercom}
-                  className="py-1 px-3 text-xs text-slate-400 hover:text-slate-200 self-center underline"
+                  className="py-1 px-3 text-xs text-slate-400 hover:text-slate-200 self-center underline font-medium"
                 >
-                  Cancel recording
+                  Cancel transmission
                 </button>
               )}
             </div>
 
             {intercomStatus && (
-              <div className={`p-2.5 rounded-lg text-xs font-medium border text-center ${
+              <div className={`p-2.5 rounded-xl text-xs font-medium border text-center ${
                 intercomStatus.type === 'success'
                   ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
                   : intercomStatus.type === 'info'
@@ -942,230 +1040,252 @@ export default function App() {
             )}
           </div>
 
-          {/* Card 1: Enroll New Face */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div>
-                <h3 className="font-bold text-base text-slate-100 flex items-center gap-2">
-                  <span className="text-amber-400">👤</span> Biometric Face Enrollment
-                </h3>
-                <p className="text-xs text-slate-400">Register familiar contacts into wearable Face Memory</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleEnrollSubmit} className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Person's Full Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. John Doe, Mom, Dr. Sharma"
-                  value={faceName}
-                  onChange={(e) => setFaceName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Face Portrait Photo
-                </label>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={handleFileChange}
-                  className="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-amber-400 hover:file:bg-slate-700 cursor-pointer"
-                  required
-                />
-              </div>
-
-              {/* Photo Preview */}
-              {filePreview && (
-                <div className="flex items-center gap-3 p-3 bg-slate-950/80 rounded-xl border border-slate-800">
-                  <img src={filePreview} alt="Preview" className="w-14 h-14 rounded-lg object-cover border border-amber-500/50 shadow" />
-                  <div className="text-xs">
-                    <span className="font-semibold text-slate-200 block truncate max-w-[200px]">{selectedFile?.name}</span>
-                    <span className="text-slate-500">{(selectedFile?.size / 1024).toFixed(1)} KB • Ready for FaceNet</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Status Message */}
-              {enrollStatus && (
-                <div className={`p-3 rounded-xl text-xs font-medium border ${
-                  enrollStatus.type === 'success'
-                    ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-800 text-rose-300'
-                }`}>
-                  {enrollStatus.message}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={enrollLoading}
-                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm shadow-lg shadow-amber-500/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-              >
-                {enrollLoading ? (
-                  <>
-                    <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
-                    Extracting Embeddings...
-                  </>
-                ) : (
-                  'Enroll Face into ChromaDB'
-                )}
-              </button>
-            </form>
-          </div>
-
-          {/* Card 2: Registered Faces List */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <h3 className="font-bold text-sm text-slate-200 flex items-center gap-2">
-                <span>📋</span> Enrolled Contacts ({enrolledFaces.length})
-              </h3>
-              <button
-                onClick={fetchFaces}
-                disabled={facesLoading}
-                className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1 font-medium transition"
-              >
-                {facesLoading ? 'Refreshing...' : '↻ Refresh'}
-              </button>
-            </div>
-
-            <div className="max-h-40 overflow-y-auto pr-1 flex flex-col gap-1.5">
-              {enrolledFaces.length === 0 ? (
-                <p className="text-xs text-slate-500 py-3 text-center italic">No faces enrolled yet. Use the form above.</p>
-              ) : (
-                enrolledFaces.map((f, i) => (
-                  <div key={i} className="flex items-center justify-between px-3 py-2 bg-slate-950/50 rounded-xl border border-slate-800/60 text-xs">
-                    <span className="font-medium text-slate-200">{f.name}</span>
-                    <span className="text-[10px] font-mono text-slate-500">{f.id}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Card 3: Emergency SOS Configuration */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-            <h3 className="font-bold text-sm text-slate-200 flex items-center gap-2 border-b border-slate-800 pb-2.5">
-              <span className="text-rose-400">🚨</span> Caregiver Emergency SOS Settings
-            </h3>
+          {/* ── CARD 3: Administrative Hub (Segmented Clean Tabs) ── */}
+          <div className="bg-[#0b1222] border border-slate-800/90 rounded-2xl p-4 shadow-xl flex flex-col gap-4 ring-1 ring-white/5">
             
-            <form onSubmit={handleEmergencySubmit} className="flex flex-col gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Primary Alert Phone Number
-                </label>
-                <input
-                  type="tel"
-                  placeholder="+91 98765 43210"
-                  value={emergencyPhone}
-                  onChange={(e) => setEmergencyPhone(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
-                  required
-                />
-              </div>
-
-              {emergencyStatus && (
-                <div className={`p-2.5 rounded-lg text-xs font-medium border ${
-                  emergencyStatus.type === 'success'
-                    ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-800 text-rose-300'
-                }`}>
-                  {emergencyStatus.message}
-                </div>
-              )}
-
+            {/* Tab Bar Header */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800/80">
               <button
-                type="submit"
-                disabled={emergencyLoading}
-                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition"
+                type="button"
+                onClick={() => setActiveTab('faces')}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                  activeTab === 'faces'
+                    ? 'bg-slate-800 text-amber-300 shadow-sm border border-slate-700'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                {emergencyLoading ? 'Updating...' : 'Save Emergency Contact'}
+                <Users className="w-3.5 h-3.5" />
+                <span>Biometrics ({enrolledFaces.length})</span>
               </button>
-            </form>
-          </div>
-
-          {/* Card 4: Wearable Camera Source Link (Phone / Webcam) */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-            <h3 className="font-bold text-sm text-slate-200 flex items-center gap-2 border-b border-slate-800 pb-2.5">
-              <span className="text-cyan-400">📱</span> Wearable Camera Stream Link
-            </h3>
-            
-            <form onSubmit={handleCameraSourceSubmit} className="flex flex-col gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Video Stream URL or Camera Index
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. http://192.168.1.10:8080/video or 0"
-                  value={cameraSource}
-                  onChange={(e) => setCameraSource(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-                  required
-                />
-                <span className="text-[11px] text-slate-500 mt-1 block">
-                  Tip: Use <code className="text-cyan-400">http://&lt;phone_ip&gt;:8080/video</code> for Android IP Webcam, or <code className="text-cyan-400">0</code> for webcam.
-                </span>
-              </div>
-
-              {cameraStatus && (
-                <div className={`p-2.5 rounded-lg text-xs font-medium border ${
-                  cameraStatus.type === 'success'
-                    ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-800 text-rose-300'
-                }`}>
-                  {cameraStatus.message}
-                </div>
-              )}
 
               <button
-                type="submit"
-                disabled={cameraLoading}
-                className="py-2 px-3 rounded-xl bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800 font-semibold text-xs transition flex items-center justify-center gap-2"
+                type="button"
+                onClick={() => setActiveTab('emergency')}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                  activeTab === 'emergency'
+                    ? 'bg-slate-800 text-rose-300 shadow-sm border border-slate-700'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                {cameraLoading ? 'Switching Stream...' : 'Switch Camera Source'}
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Emergency SOS</span>
               </button>
-            </form>
-          </div>
 
-          {/* Card 5: Real-Time Location Awareness (Ola Maps) */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <h3 className="font-bold text-sm text-slate-200 flex items-center gap-2">
-                <span className="text-amber-400">📍</span> Live Location (Ola Maps)
-              </h3>
               <button
-                onClick={fetchLocation}
-                disabled={locationLoading}
-                className="text-[11px] text-amber-400 hover:text-amber-300 hover:underline flex items-center gap-1 font-medium"
+                type="button"
+                onClick={() => setActiveTab('camera')}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                  activeTab === 'camera'
+                    ? 'bg-slate-800 text-cyan-300 shadow-sm border border-slate-700'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                {locationLoading ? 'Locating...' : 'Refresh'}
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Camera Stream</span>
               </button>
             </div>
 
-            {locationData && locationData.success ? (
-              <div className="flex flex-col gap-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
-                <div className="text-xs text-slate-200 font-medium leading-relaxed">
-                  {locationData.address}
-                </div>
-                {locationData.coordinates && (
-                  <div className="text-[10px] font-mono text-amber-400/90 flex gap-3">
-                    <span>Lat: {locationData.coordinates.lat?.toFixed(4)}</span>
-                    <span>Lng: {locationData.coordinates.lng?.toFixed(4)}</span>
+            {/* ── TAB PANEL 1: Biometric Face ID & Directory ── */}
+            {activeTab === 'faces' && (
+              <div className="flex flex-col gap-4">
+                
+                {/* Face Enrollment Form */}
+                <form onSubmit={handleEnrollSubmit} className="flex flex-col gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                      Person's Full Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Dr. Sharma, Mom, Rahul"
+                      value={faceName}
+                      onChange={(e) => setFaceName(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                      required
+                    />
                   </div>
-                )}
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                      Portrait Photograph
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleFileChange}
+                      className="w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-amber-400 hover:file:bg-slate-700 cursor-pointer"
+                      required
+                    />
+                  </div>
+
+                  {/* Photo Preview */}
+                  {filePreview && (
+                    <div className="flex items-center gap-3 p-2.5 bg-slate-950 rounded-xl border border-slate-800">
+                      <img src={filePreview} alt="Preview" className="w-12 h-12 rounded-lg object-cover border border-amber-500/50 shadow" />
+                      <div className="text-xs truncate">
+                        <span className="font-semibold text-slate-200 block truncate">{selectedFile?.name}</span>
+                        <span className="text-[11px] text-slate-500">{(selectedFile?.size / 1024).toFixed(1)} KB • Ready for FaceNet</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {enrollStatus && (
+                    <div className={`p-2.5 rounded-xl text-xs font-medium border ${
+                      enrollStatus.type === 'success'
+                        ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+                        : 'bg-rose-950/60 border-rose-800 text-rose-300'
+                    }`}>
+                      {enrollStatus.message}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={enrollLoading}
+                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs shadow-md shadow-amber-500/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    {enrollLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Extracting FaceNet Vector...
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-4 h-4" />
+                        Enroll Face into ChromaDB
+                      </>
+                    )}
+                  </button>
+                </form>
+
+                {/* Enrolled Contacts Directory */}
+                <div className="border-t border-slate-800/80 pt-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      Enrolled Contacts ({enrolledFaces.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={fetchFaces}
+                      disabled={facesLoading}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 font-semibold"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${facesLoading ? 'animate-spin' : ''}`} /> Refresh
+                    </button>
+                  </div>
+
+                  <div className="max-h-36 overflow-y-auto pr-1 flex flex-col gap-1.5 custom-scrollbar">
+                    {enrolledFaces.length === 0 ? (
+                      <p className="text-xs text-slate-500 py-3 text-center italic">No faces enrolled in ChromaDB yet.</p>
+                    ) : (
+                      enrolledFaces.map((f, i) => (
+                        <div key={i} className="flex items-center justify-between px-3 py-2 bg-slate-950/60 rounded-xl border border-slate-800/70 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-amber-950 text-amber-300 border border-amber-800/80 flex items-center justify-center font-bold text-[10px]">
+                              {f.name.charAt(0).toUpperCase()}
+                            </span>
+                            <span className="font-medium text-slate-200">{f.name}</span>
+                          </div>
+                          <span className="text-[10px] font-mono text-slate-500">{f.id}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
               </div>
-            ) : (
-              <p className="text-xs text-slate-500 py-2 italic">
-                {locationLoading ? 'Pinpointing location via Ola Maps...' : 'Click Refresh to retrieve real-time location.'}
-              </p>
             )}
+
+            {/* ── TAB PANEL 2: Emergency SOS Configuration ── */}
+            {activeTab === 'emergency' && (
+              <form onSubmit={handleEmergencySubmit} className="flex flex-col gap-3.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                    Primary Caregiver Alert Number
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-rose-400 absolute left-3 top-3" />
+                    <input
+                      type="tel"
+                      placeholder="+91 98765 43210"
+                      value={emergencyPhone}
+                      onChange={(e) => setEmergencyPhone(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                      required
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Saved permanently to disk in <code className="text-rose-400">backend/settings.json</code>.
+                  </span>
+                </div>
+
+                {emergencyStatus && (
+                  <div className={`p-2.5 rounded-xl text-xs font-medium border ${
+                    emergencyStatus.type === 'success'
+                      ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+                      : 'bg-rose-950/60 border-rose-800 text-rose-300'
+                  }`}>
+                    {emergencyStatus.message}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={emergencyLoading}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-bold text-xs shadow-md shadow-rose-600/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  {emergencyLoading ? 'Persisting to Storage...' : 'Save Emergency Contact Permanently'}
+                </button>
+              </form>
+            )}
+
+            {/* ── TAB PANEL 3: Camera Stream Link Switcher ── */}
+            {activeTab === 'camera' && (
+              <form onSubmit={handleCameraSourceSubmit} className="flex flex-col gap-3.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                    Active Video Source URL or Device Index
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. http://192.168.1.15:8080/video or 0"
+                    value={cameraSource}
+                    onChange={(e) => setCameraSource(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                    required
+                  />
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Use <code className="text-cyan-400">0</code> for laptop webcam, or phone IP Webcam stream URL.
+                  </span>
+                </div>
+
+                {cameraStatus && (
+                  <div className={`p-2.5 rounded-xl text-xs font-medium border ${
+                    cameraStatus.type === 'success'
+                      ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+                      : 'bg-rose-950/60 border-rose-800 text-rose-300'
+                  }`}>
+                    {cameraStatus.message}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={cameraLoading}
+                  className="w-full py-2.5 px-4 rounded-xl bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800 font-bold text-xs shadow-sm transition flex items-center justify-center gap-2"
+                >
+                  {cameraLoading ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Connecting Stream...
+                    </>
+                  ) : (
+                    'Switch Video Source'
+                  )}
+                </button>
+              </form>
+            )}
+
           </div>
 
         </div>
